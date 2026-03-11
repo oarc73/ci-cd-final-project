@@ -1,0 +1,52 @@
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: ci-cd-pipeline
+spec:
+  workspaces:
+  - name: shared-workspace
+  params:
+  - name: image-name
+    type: string
+    description: Name of the image to build
+  - name: manifest-dir
+    type: string
+    description: Directory containing kubernetes manifests
+    default: "k8s"
+  tasks:
+  - name: lint
+    taskRef:
+      name: lint
+    workspaces:
+    - name: source
+      workspace: shared-workspace
+  - name: test
+    taskRef:
+      name: test
+    workspaces:
+    - name: source
+      workspace: shared-workspace
+    runAfter:
+    - lint
+  - name: build-image
+    taskRef:
+      name: build-image
+    params:
+    - name: image-name
+      value: $(params.image-name)
+    workspaces:
+    - name: source
+      workspace: shared-workspace
+    runAfter:
+    - test
+  - name: deploy
+    taskRef:
+      name: deploy
+    params:
+    - name: manifest-dir
+      value: $(params.manifest-dir)
+    workspaces:
+    - name: source
+      workspace: shared-workspace
+    runAfter:
+    - build-image
