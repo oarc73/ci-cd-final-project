@@ -1,27 +1,86 @@
-apiVersion: tekton.dev/v1beta1
-kind: Task
+kind: Pipeline
 metadata:
-  name: flake8
+  name: cd-pipeline
 spec:
-  workspaces:
-    - name: source
   params:
-    - name: image
-      description: Image to use for flake8
+    - name: repo-url
       type: string
-      default: "python:3.9-slim"
-    - name: args
-      description: Path or arguments to pass to flake8
+    - name: branch
+      default: main
       type: string
-      default: "."
-  steps:
-    - name: flake8
-      image: $(params.image)
-      workingDir: $(workspaces.source.path)
-      script: |
-        #!/bin/bash
-        set -e
-        python -m pip install --upgrade pip wheel
-        pip install flake8
-        flake8 $(params.args) --count --select=E9,F63,F7,F82 --show-source --statistics
-        flake8 $(params.args) --count --max-complexity=10 --max-line-length=127 --statistics
+    - name: app-name
+      type: string
+    - name: build-image
+      type: string
+  tasks:
+    - name: cleanup
+      taskRef:
+        kind: Task
+        name: cleanup
+      workspaces:
+        - name: source
+          workspace: output
+    - name: clone
+      runAfter:
+        - cleanup
+      taskRef:
+        kind: ClusterTask
+        name: git-clone
+      params:
+        - name: url
+          value: $(params.repo-url)
+        - name: revision
+          value: $(params.branch)
+      workspaces:
+        - name: output
+          workspace: output
+    - name: lint
+      runAfter:
+        - clone
+      taskRef:
+        kind: Task
+        name: flake8
+      params:
+        - name: image
+          value: python:3.9-slim
+        - name: args
+          value: service
+      workspaces:
+        - name: source
+          workspace: output
+    - name: tests
+      runAfter:
+        - clone
+      taskRef:
+        kind: Task
+        name: nose
+      params:
+        - name: args
+          value: "-v --with-spec --spec-color --with-coverage --cover-package=app"
+      workspaces:
+        - name: source
+          workspace: output
+    - name: build
+      runAfter:
+        - lint
+        - tests
+      taskRef:
+        kind: ClusterTask
+        name: buildah
+      params:
+        - name: IMAGE
+          value: $(params.build-image)
+      workspaces:
+        - name: source
+          workspace: output
+    - name: deploy
+      runAfter:
+        - build
+      taskRef:
+        kind: ClusterTask
+        name: openshift-client
+      params:
+        - name: SCRIPT
+          value: "oc create deployment $(params.app-name) --image=$(params.build-image) --dry-run=client -o yaml | oc apply -f -"
+  workspaces:
+    - name: output
